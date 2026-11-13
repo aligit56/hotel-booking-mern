@@ -1,6 +1,8 @@
-import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AuthProvider } from './context/AuthProvider'
 import useAuth from './context/useAuth'
+import { ThemeProvider } from './context/ThemeContext'
 import Navbar from './components/Navbar'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminDashboard from './pages/AdminDashboard'
@@ -13,6 +15,50 @@ import OwnerDashboard from './pages/OwnerDashboard'
 import Register from './pages/Register'
 import UserProfile from './pages/UserProfile'
 
+function HashScroll() {
+  const { pathname, hash } = useLocation()
+
+  useEffect(() => {
+    if (!hash) return undefined
+
+    let attempts = 0
+    let timeoutId
+    const scrollToTarget = () => {
+      const target = document.getElementById(hash.slice(1))
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      } else if (attempts < 40) {
+        attempts += 1
+        timeoutId = window.setTimeout(scrollToTarget, 50)
+      }
+    }
+
+    scrollToTarget()
+    return () => window.clearTimeout(timeoutId)
+  }, [pathname, hash])
+
+  return null
+}
+
+function FooterSectionLink({ section, children }) {
+  const location = useLocation()
+  const hash = `#${section}`
+
+  return (
+    <Link
+      to={`/${hash}`}
+      onClick={() => {
+        if (location.pathname === '/' && location.hash === hash) {
+          document.getElementById(section)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
+      }}
+      className="hover:text-amber-700"
+    >
+      {children}
+    </Link>
+  )
+}
+
 function DashboardRedirect() {
   const { user } = useAuth()
   if (user?.role === 'admin') return <Navigate to="/admin" replace />
@@ -24,6 +70,7 @@ function AppRoutes() {
   return (
     <div className="min-h-screen bg-[#fbfaf8] text-slate-900">
       <Navbar />
+      <HashScroll />
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/hotels" element={<HotelList />} />
@@ -43,9 +90,9 @@ function AppRoutes() {
             <p className="mt-1">Thoughtful stays, wherever you’re headed.</p>
           </div>
           <nav aria-label="Footer" className="flex flex-wrap gap-5">
-            <Link to="/#about" className="hover:text-amber-700">About</Link>
-            <Link to="/#why-staywell" className="hover:text-amber-700">Why Staywell</Link>
-            <Link to="/#guest-reviews" className="hover:text-amber-700">Guest reviews</Link>
+            <FooterSectionLink section="about">About</FooterSectionLink>
+            <FooterSectionLink section="why-staywell">Why Staywell</FooterSectionLink>
+            <FooterSectionLink section="guest-reviews">Guest reviews</FooterSectionLink>
             <Link to="/register?role=owner" className="hover:text-amber-700">List your property</Link>
           </nav>
           <p>© Staywell</p>
@@ -58,9 +105,11 @@ function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   )
 }

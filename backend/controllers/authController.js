@@ -6,6 +6,7 @@ const Room = require('../models/Room')
 const Booking = require('../models/Booking')
 const Review = require('../models/Review')
 const HttpError = require('../utils/HttpError')
+const { releaseBookingRooms } = require('../utils/bookingRooms')
 
 const cookieOptions = () => ({
   httpOnly: true,
@@ -125,10 +126,7 @@ async function deleteUser(req, res) {
       for (let day = new Date(booking.checkIn); day < booking.checkOut; day.setUTCDate(day.getUTCDate() + 1)) {
         dates.push(new Date(day))
       }
-      return Room.updateOne(
-        { _id: booking.roomId, 'roomNumbers.number': booking.roomNumber },
-        { $pull: { 'roomNumbers.$.unavailableDates': { $in: dates } } },
-      )
+      return releaseBookingRooms(booking, dates)
     }))
 
   const reviewsByUser = await Review.find({ userId: user.id, hotelId: { $nin: hotelIds } }).select('hotelId')

@@ -3,6 +3,7 @@ import { Building2, CalendarDays, Users } from 'lucide-react'
 import api from '../api/axios'
 import Notice from '../components/Notice'
 import { formatPKR } from '../utils/currency'
+import bookingRoomSummary from '../utils/bookingRoomSummary'
 
 const tabs = [
   { id: 'users', label: 'All users', icon: Users },
@@ -64,6 +65,19 @@ export default function AdminDashboard() {
     }
   }
 
+  const updateBookingStatus = async (booking, status) => {
+    setError('')
+    setNotice('')
+    try {
+      await api.patch(`/bookings/${booking._id}`, { status })
+      setNotice(`Booking status updated to ${status}.`)
+      setLoadedTab('')
+      await loadRecords('bookings')
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'The booking status could not be updated.')
+    }
+  }
+
   return (
     <main className="mx-auto max-w-7xl px-5 py-12">
       <p className="text-sm font-semibold uppercase tracking-[0.16em] text-amber-700">Platform control</p>
@@ -79,14 +93,14 @@ export default function AdminDashboard() {
             <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr>
               {tab === 'users' && <><th className="px-5 py-4">Name</th><th className="px-5 py-4">Email</th><th className="px-5 py-4">Role</th><th className="px-5 py-4">Joined</th></>}
               {tab === 'hotels' && <><th className="px-5 py-4">Property</th><th className="px-5 py-4">City</th><th className="px-5 py-4">Owner</th><th className="px-5 py-4">Rating</th></>}
-              {tab === 'bookings' && <><th className="px-5 py-4">Guest</th><th className="px-5 py-4">Property</th><th className="px-5 py-4">Dates</th><th className="px-5 py-4">Total / status</th></>}
+              {tab === 'bookings' && <><th className="px-5 py-4">Guest</th><th className="px-5 py-4">Property / room</th><th className="px-5 py-4">Dates</th><th className="px-5 py-4">Total</th><th className="px-5 py-4">Status</th></>}
               <th className="px-5 py-4">Action</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100">
               {records.map((record) => <tr key={record._id}>
                 {tab === 'users' && <><td className="px-5 py-4 font-medium">{record.name}</td><td className="px-5 py-4">{record.email}</td><td className="px-5 py-4 capitalize">{record.role}</td><td className="px-5 py-4">{new Date(record.createdAt).toLocaleDateString()}</td></>}
-                {tab === 'hotels' && <><td className="px-5 py-4 font-medium">{record.name}{record.isDemo && <span className="ml-2 rounded-full bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800">SAMPLE</span>}</td><td className="px-5 py-4">{record.city}</td><td className="px-5 py-4">{record.ownerId?.name || '—'}</td><td className="px-5 py-4">{Number(record.rating || 0).toFixed(1)}</td></>}
-                {tab === 'bookings' && <><td className="px-5 py-4">{record.userId?.name || 'Guest'}</td><td className="px-5 py-4">{record.hotelId?.name || 'Hotel'}<span className="block text-xs text-slate-500">{record.roomId?.title}</span></td><td className="px-5 py-4">{new Date(record.checkIn).toLocaleDateString()} – {new Date(record.checkOut).toLocaleDateString()}</td><td className="px-5 py-4">{formatPKR(record.totalPrice)} · <span className="capitalize">{record.status}</span></td></>}
+                {tab === 'hotels' && <><td className="px-5 py-4 font-medium">{record.name}</td><td className="px-5 py-4">{record.city}</td><td className="px-5 py-4">{record.ownerId?.name || '—'}</td><td className="px-5 py-4">{Number(record.rating || 0).toFixed(1)}</td></>}
+                {tab === 'bookings' && <><td className="px-5 py-4">{record.userId?.name || 'Guest'}<span className="block text-xs text-slate-500">{record.userId?.email}</span></td><td className="px-5 py-4">{record.hotelId?.name || 'Hotel'}<span className="block text-xs text-slate-500">{bookingRoomSummary(record)}</span></td><td className="px-5 py-4">{new Date(record.checkIn).toLocaleDateString()} – {new Date(record.checkOut).toLocaleDateString()}</td><td className="px-5 py-4 font-medium">{formatPKR(record.totalPrice)}</td><td className="px-5 py-4"><select disabled={record.status === 'cancelled'} aria-label={`Update booking status for ${record.userId?.name || 'guest'}`} value={record.status} onChange={(event) => updateBookingStatus(record, event.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 capitalize disabled:cursor-not-allowed disabled:bg-slate-100"><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></td></>}
                 <td className="px-5 py-4"><button onClick={() => removeRecord(record)} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50">Delete</button></td>
               </tr>)}
             </tbody>

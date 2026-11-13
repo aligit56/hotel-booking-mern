@@ -172,6 +172,33 @@ test('role-protected hotel booking lifecycle works end to end', async () => {
   assert.equal(result.response.status, 201)
   const roomId = result.data.room._id
 
+  result = await request('/rooms', {
+    method: 'POST',
+    body: {
+      hotelId,
+      title: 'Family room',
+      price: 400,
+      maxPeople: 4,
+      desc: 'A larger test room.',
+      roomNumbers: [{ number: 201 }],
+    },
+  }, ownerCookie)
+  assert.equal(result.response.status, 201)
+
+  result = await request('/hotels?city=Test%20City&guests=3')
+  assert.equal(result.response.status, 200)
+  assert.equal(result.data.hotels.find((hotel) => hotel._id === hotelId).minPrice, 400)
+  result = await request('/hotels?city=Test%20City&guests=5')
+  assert.equal(result.response.status, 200)
+  assert.equal(result.data.hotels.find((hotel) => hotel._id === hotelId).minPrice, 525)
+  result = await request('/hotels?city=Test%20City&guests=31')
+  assert.equal(result.response.status, 200, 'Guest counts above 30 should not be rejected by an application-level cap.')
+  assert.equal(result.data.hotels.find((hotel) => hotel._id === hotelId).minPrice, null)
+  result = await request('/hotels?city=Test%20City&guests=0')
+  assert.equal(result.response.status, 400)
+  result = await request('/hotels?city=Test%20City&guests=2&checkIn=2030-01-01')
+  assert.equal(result.response.status, 400)
+
   const checkIn = new Date(Date.now() + 10 * 86400000)
   checkIn.setUTCHours(0, 0, 0, 0)
   const checkOut = new Date(checkIn)
@@ -190,6 +217,10 @@ test('role-protected hotel booking lifecycle works end to end', async () => {
   assert.equal(result.data.booking.totalPrice, 250)
   const firstBookingId = result.data.booking._id
 
+  result = await request(`/hotels?city=Test%20City&guests=2&checkIn=${checkIn.toISOString().slice(0, 10)}&checkOut=${checkOut.toISOString().slice(0, 10)}`)
+  assert.equal(result.response.status, 200)
+  assert.equal(result.data.hotels.find((hotel) => hotel._id === hotelId).minPrice, 400, 'Search rates should exclude rooms already booked for those dates.')
+
   result = await request('/bookings', { method: 'POST', body: bookingBody }, guestCookie)
   assert.equal(result.response.status, 409, 'Overlapping dates must not be double-booked.')
 
@@ -202,6 +233,72 @@ test('role-protected hotel booking lifecycle works end to end', async () => {
   result = await request('/bookings', { method: 'POST', body: bookingBody }, guestCookie)
   assert.equal(result.response.status, 201, 'Cancelling must release the booked dates.')
   const secondBookingId = result.data.booking._id
+
+  const groupCheckIn = new Date(checkIn)
+  groupCheckIn.setUTCDate(groupCheckIn.getUTCDate() + 10)
+  const groupCheckOut = new Date(groupCheckIn)
+  groupCheckOut.setUTCDate(groupCheckOut.getUTCDate() + 2)
+  const familyRoom = await Room.findOne({ hotelId, maxPeople: 4 })
+  const groupBookingBody = {
+    hotelId,
+    guests: 5,
+    rooms: [
+      { roomId, roomNumber: 101, guests: 2 },
+      { roomId: familyRoom.id, roomNumber: 201, guests: 3 },
+    ],
+    checkIn: groupCheckIn.toISOString(),
+    checkOut: groupCheckOut.toISOString(),
+  }
+  result = await request(`/hotels?city=Test%20City&guests=5&checkIn=${groupCheckIn.toISOString().slice(0, 10)}&checkOut=${groupCheckOut.toISOString().slice(0, 10)}`)
+  assert.equal(result.response.status, 200)
+  assert.equal(result.data.hotels.find((hotel) => hotel._id === hotelId).minPrice, 525)
+  result = await request('/bookings', {
+    method: 'POST',
+    body: { ...groupBookingBody, rooms: [{ ...groupBookingBody.rooms[0], guests: 3 }, groupBookingBody.rooms[1]] },
+  }, guestCookie)
+  assert.equal(result.response.status, 400, 'A room allocation cannot exceed that room type’s capacity.')
+  result = await request('/bookings', { method: 'POST', body: groupBookingBody }, guestCookie)
+  assert.equal(result.response.status, 201)
+  assert.equal(result.data.booking.rooms.length, 2)
+  assert.equal(result.data.booking.totalPrice, 1050)
+  const groupBookingId = result.data.booking._id
+
+  result = await request(`/hotels?city=Test%20City&guests=5&checkIn=${groupCheckIn.toISOString().slice(0, 10)}&checkOut=${groupCheckOut.toISOString().slice(0, 10)}`)
+  assert.equal(result.response.status, 200)
+  assert.equal(result.data.hotels.find((hotel) => hotel._id === hotelId).minPrice, null)
+  result = await request('/bookings', { method: 'POST', body: groupBookingBody }, guestCookie)
+  assert.equal(result.response.status, 409, 'All rooms in a group booking must be reserved atomically.')
+  result = await request(`/rooms/${roomId}`, {
+    method: 'PATCH',
+    body: { maxPeople: 1 },
+  }, ownerCookie)
+  assert.equal(result.response.status, 409, 'Room capacity cannot be reduced below an active booking allocation.')
+  result = await request(`/rooms/${familyRoom.id}`, {
+    method: 'PATCH',
+    body: { roomNumbers: [{ number: 202 }] },
+  }, ownerCookie)
+  assert.equal(result.response.status, 409, 'An owner cannot remove a room allocated to an active group booking.')
+
+  result = await request('/bookings/mine', {}, guestCookie)
+  assert.equal(result.response.status, 200)
+  const groupBooking = result.data.bookings.find((booking) => booking._id === groupBookingId)
+  assert.equal(groupBooking.rooms.length, 2)
+  assert.equal(groupBooking.rooms[1].roomId.title, 'Family room')
+
+  result = await request(`/bookings/${groupBookingId}`, {
+    method: 'PATCH',
+    body: { status: 'cancelled' },
+  }, guestCookie)
+  assert.equal(result.response.status, 200)
+  result = await request('/bookings', { method: 'POST', body: groupBookingBody }, guestCookie)
+  assert.equal(result.response.status, 201, 'Cancelling a group booking must release every allocated room.')
+  const cancellableGroupBookingId = result.data.booking._id
+  result = await request(`/bookings/${cancellableGroupBookingId}`, { method: 'DELETE' }, guestCookie)
+  assert.equal(result.response.status, 200)
+  result = await request('/bookings', { method: 'POST', body: groupBookingBody }, guestCookie)
+  assert.equal(result.response.status, 201, 'Deleting a group booking must release every allocated room.')
+  result = await request(`/bookings/${result.data.booking._id}`, { method: 'DELETE' }, guestCookie)
+  assert.equal(result.response.status, 200)
 
   result = await request(`/bookings/${secondBookingId}`, {
     method: 'PATCH',
@@ -225,6 +322,11 @@ test('role-protected hotel booking lifecycle works end to end', async () => {
   })
   assert.equal(result.response.status, 200)
   const adminCookie = getCookie(result.response)
+  result = await request('/bookings', {}, adminCookie)
+  assert.equal(result.response.status, 200)
+  assert.ok(result.data.bookings.some(
+    (booking) => booking._id === secondBookingId && booking.hotelId?._id === hotelId,
+  ), 'Administrators should be able to see all reservations in the bookings panel.')
   result = await request('/hotels?limit=50', {}, adminCookie)
   assert.ok(result.data.hotels.some(
     (hotel) => hotel._id === hotelId && hotel.ownerId?.name === 'Integration Owner',

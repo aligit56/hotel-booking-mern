@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
-import { Menu, X } from 'lucide-react'
+import { Menu, Moon, Sun, X } from 'lucide-react'
 import useAuth from '../context/useAuth'
+import useTheme from '../context/useTheme'
 
 const linkStyle = ({ isActive }) =>
   `text-sm font-medium transition hover:text-amber-700 ${isActive ? 'text-amber-700' : 'text-slate-600'}`
 
 export default function Navbar() {
   const { user, loading, signOut } = useAuth()
+  const { theme, toggleTheme } = useTheme()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
   const navigate = useNavigate()
@@ -31,9 +33,21 @@ export default function Navbar() {
         <Link to="/" className="text-2xl font-bold tracking-tight text-slate-900">
           stay<span className="text-amber-600">well</span>
         </Link>
-        <button className="rounded-lg p-2 text-slate-700 md:hidden" onClick={() => setOpen(!open)} aria-label="Toggle navigation">
-          {open ? <X size={21} /> : <Menu size={21} />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-pressed={theme === 'dark'}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="rounded-lg border border-slate-300 p-2 text-slate-700 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-600"
+          >
+            {theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}
+          </button>
+          <button type="button" className="rounded-lg p-2 text-slate-700 md:hidden" onClick={() => setOpen(!open)} aria-label="Toggle navigation">
+            {open ? <X size={21} /> : <Menu size={21} />}
+          </button>
+        </div>
         <nav className={`${open ? 'absolute left-0 right-0 top-full flex flex-col border-b border-slate-200 bg-white p-5 shadow-lg' : 'hidden'} gap-6 md:static md:flex md:flex-row md:items-center md:border-0 md:bg-transparent md:p-0 md:shadow-none`}>
           <NavLink to="/hotels" className={linkStyle} onClick={() => setOpen(false)}>Explore stays</NavLink>
           {user ? (

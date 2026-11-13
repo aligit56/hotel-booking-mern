@@ -18,7 +18,13 @@ const roomSchema = new mongoose.Schema(
     },
     title: { type: String, required: true, trim: true, maxlength: 120 },
     price: { type: Number, required: true, min: 0 },
-    maxPeople: { type: Number, required: true, min: 1, max: 30 },
+    maxPeople: {
+      type: Number,
+      required: true,
+      min: 1,
+      max: 30,
+      validate: { validator: Number.isInteger, message: 'Room capacity must be a whole number.' },
+    },
     desc: { type: String, required: true, trim: true, maxlength: 3000 },
     demoKey: { type: String, trim: true, unique: true, sparse: true, select: false },
     roomNumbers: { type: [roomNumberSchema], required: true, validate: {

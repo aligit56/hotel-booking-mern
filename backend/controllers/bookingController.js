@@ -3,6 +3,7 @@ const Booking = require('../models/Booking')
 const Hotel = require('../models/Hotel')
 const Room = require('../models/Room')
 const HttpError = require('../utils/HttpError')
+const { releaseBookingRooms } = require('../utils/bookingRooms')
 
 function validId(id) {
   if (!mongoose.isValidObjectId(id)) throw new HttpError(400, 'Invalid record ID.')
@@ -30,12 +31,32 @@ async function createBooking(req, res) {
     checkOut: rawCheckOut,
   } = req.body || {}
   validId(hotelId)
-  validId(roomId)
-  if (!Number.isInteger(Number(roomNumber)) || Number(roomNumber) < 1) {
-    throw new HttpError(400, 'A valid room number is required.')
-  }
   const guests = Number(rawGuests)
-  if (!Number.isInteger(guests) || guests < 1) throw new HttpError(400, 'At least one guest is required.')
+  if (!Number.isSafeInteger(guests) || guests < 1) {
+    throw new HttpError(400, 'Enter a positive whole number of guests.')
+  }
+
+  const requestedRooms = Array.isArray(req.body?.rooms)
+    ? req.body.rooms
+    : [{ roomId, roomNumber, guests }]
+  if (!requestedRooms.length) throw new HttpError(400, 'At least one available room is required.')
+  const selections = requestedRooms.map((selection) => {
+    validId(selection?.roomId)
+    const number = Number(selection.roomNumber)
+    const assignedGuests = Number(selection.guests)
+    if (!Number.isSafeInteger(number) || number < 1) {
+      throw new HttpError(400, 'A valid room number is required.')
+    }
+    if (!Number.isSafeInteger(assignedGuests) || assignedGuests < 1) {
+      throw new HttpError(400, 'Each room must be assigned at least one guest.')
+    }
+    return { roomId: selection.roomId, roomNumber: number, guests: assignedGuests }
+  })
+  const uniqueRooms = new Set(selections.map(({ roomId: selectedRoomId, roomNumber: number }) => `${selectedRoomId}:${number}`))
+  if (uniqueRooms.size !== selections.length) throw new HttpError(400, 'A room can only be selected once.')
+  if (selections.reduce((total, selection) => total + selection.guests, 0) !== guests) {
+    throw new HttpError(400, 'Room guest assignments must add up to the total number of guests.')
+  }
 
   const checkIn = rawCheckIn ? dateOnly(new Date(rawCheckIn)) : null
   const checkOut = rawCheckOut ? dateOnly(new Date(rawCheckOut)) : null
@@ -49,50 +70,74 @@ async function createBooking(req, res) {
     throw new HttpError(400, 'A stay cannot be longer than 365 nights.')
   }
 
-  const [hotel, room] = await Promise.all([
+  const roomIds = [...new Set(selections.map((selection) => selection.roomId))]
+  const [hotel, rooms] = await Promise.all([
     Hotel.findById(hotelId).select('_id'),
-    Room.findById(roomId),
+    Room.find({ _id: { $in: roomIds }, hotelId }),
   ])
-  if (!hotel || !room || room.hotelId.toString() !== hotelId) {
-    throw new HttpError(404, 'The selected hotel room was not found.')
+  if (!hotel) throw new HttpError(404, 'The selected hotel was not found.')
+  const roomsById = new Map(rooms.map((room) => [room.id, room]))
+  const bookingRooms = selections.map((selection) => {
+    const room = roomsById.get(selection.roomId)
+    if (!room || !room.roomNumbers.some((item) => item.number === selection.roomNumber)) {
+      throw new HttpError(404, 'A selected hotel room was not found.')
+    }
+    if (selection.guests > room.maxPeople) {
+      throw new HttpError(400, `Room ${selection.roomNumber} cannot accommodate ${selection.guests} guests.`)
+    }
+    return { ...selection, price: room.price }
+  })
+  const totalCapacity = bookingRooms.reduce((total, selection) => (
+    total + roomsById.get(selection.roomId).maxPeople
+  ), 0)
+  if (totalCapacity < guests) {
+    throw new HttpError(400, 'The selected rooms cannot accommodate all guests.')
   }
-  if (guests > room.maxPeople) throw new HttpError(400, 'The selected room cannot accommodate that many guests.')
 
   const dates = stayDates(checkIn, checkOut)
   const nights = dates.length
-  const reservation = await Room.findOneAndUpdate(
-    {
-      _id: roomId,
-      hotelId,
-      roomNumbers: {
-        $elemMatch: {
-          number: Number(roomNumber),
-          unavailableDates: { $not: { $elemMatch: { $in: dates } } },
-        },
-      },
-    },
-    { $addToSet: { 'roomNumbers.$.unavailableDates': { $each: dates } } },
-    { returnDocument: 'after' },
-  )
-  if (!reservation) throw new HttpError(409, 'That room is not available for the selected dates.')
-
+  const reservedRooms = []
   try {
+    for (const selection of bookingRooms) {
+      const reservation = await Room.findOneAndUpdate(
+        {
+          _id: selection.roomId,
+          hotelId,
+          roomNumbers: {
+            $elemMatch: {
+              number: selection.roomNumber,
+              unavailableDates: { $not: { $elemMatch: { $in: dates } } },
+            },
+          },
+        },
+        { $addToSet: { 'roomNumbers.$.unavailableDates': { $each: dates } } },
+        { returnDocument: 'after' },
+      )
+      if (!reservation) throw new HttpError(409, 'One or more selected rooms are no longer available for these dates.')
+      reservedRooms.push(selection)
+    }
+
     const booking = await Booking.create({
       userId: req.user.id,
       hotelId,
-      roomId,
-      roomNumber: Number(roomNumber),
+      roomId: bookingRooms[0].roomId,
+      roomNumber: bookingRooms[0].roomNumber,
+      rooms: bookingRooms.map(({ roomId: selectedRoomId, roomNumber: number, guests: assignedGuests }) => ({
+        roomId: selectedRoomId,
+        roomNumber: number,
+        guests: assignedGuests,
+      })),
       guests,
       checkIn,
       checkOut,
-      totalPrice: room.price * nights,
+      totalPrice: bookingRooms.reduce((total, room) => total + room.price, 0) * nights,
     })
     return res.status(201).json({ booking })
   } catch (error) {
-    await Room.updateOne(
-      { _id: roomId, 'roomNumbers.number': Number(roomNumber) },
+    await Promise.all(reservedRooms.map(({ roomId: selectedRoomId, roomNumber: number }) => Room.updateOne(
+      { _id: selectedRoomId, 'roomNumbers.number': number },
       { $pull: { 'roomNumbers.$.unavailableDates': { $in: dates } } },
-    )
+    )))
     throw error
   }
 }
@@ -109,6 +154,7 @@ async function listBookings(req, res) {
     .populate('userId', 'name email')
     .populate('hotelId', 'name city photos isDemo')
     .populate('roomId', 'title')
+    .populate('rooms.roomId', 'title')
     .sort({ createdAt: -1 })
   return res.json({ bookings })
 }
@@ -119,6 +165,7 @@ async function getBooking(req, res) {
     .populate('userId', 'name email')
     .populate('hotelId', 'name city photos isDemo ownerId')
     .populate('roomId', 'title')
+    .populate('rooms.roomId', 'title')
   if (!booking) throw new HttpError(404, 'Booking not found.')
   const ownerId = booking.hotelId.ownerId?.toString()
   if (
@@ -155,10 +202,7 @@ async function updateBooking(req, res) {
 
   if (status === 'cancelled' && booking.status !== 'cancelled') {
     const dates = stayDates(booking.checkIn, booking.checkOut)
-    await Room.updateOne(
-      { _id: booking.roomId, 'roomNumbers.number': booking.roomNumber },
-      { $pull: { 'roomNumbers.$.unavailableDates': { $in: dates } } },
-    )
+    await releaseBookingRooms(booking, dates)
   }
   booking.status = status
   await booking.save()
@@ -176,10 +220,7 @@ async function deleteBooking(req, res) {
   if (!canDelete) throw new HttpError(403, 'You cannot delete this booking.')
 
   if (booking.status !== 'cancelled') {
-    await Room.updateOne(
-      { _id: booking.roomId, 'roomNumbers.number': booking.roomNumber },
-      { $pull: { 'roomNumbers.$.unavailableDates': { $in: stayDates(booking.checkIn, booking.checkOut) } } },
-    )
+    await releaseBookingRooms(booking, stayDates(booking.checkIn, booking.checkOut))
   }
   await booking.deleteOne()
   return res.json({ message: 'Booking deleted.' })

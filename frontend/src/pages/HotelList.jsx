@@ -15,7 +15,15 @@ export default function HotelList() {
 
   useEffect(() => {
     let active = true
-    api.get('/hotels', { params: { city: searchParams.get('city') || undefined, limit: 50 } })
+    api.get('/hotels', {
+      params: {
+        city: searchParams.get('city') || undefined,
+        guests: searchParams.get('guests') || undefined,
+        checkIn: searchParams.get('checkIn') || undefined,
+        checkOut: searchParams.get('checkOut') || undefined,
+        limit: 50,
+      },
+    })
       .then(({ data }) => {
         if (active) {
           setHotels(data.hotels)

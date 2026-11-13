@@ -7,6 +7,7 @@ import Notice from '../components/Notice'
 import HotelImage from '../components/HotelImage'
 import { DestinationCredit } from '../components/DestinationImage'
 import { formatPKR } from '../utils/currency'
+import allocateGuestRooms from '../utils/allocateGuestRooms'
 
 export default function HotelDetails() {
   const { id } = useParams()
@@ -19,9 +20,13 @@ export default function HotelDetails() {
   const [completedBookings, setCompletedBookings] = useState([])
   const [reviewForm, setReviewForm] = useState({ rating: '5', comment: '' })
   const [reviewBusy, setReviewBusy] = useState(false)
-  const [roomNumber, setRoomNumber] = useState('')
   const [dates, setDates] = useState({ checkIn: searchParams.get('checkIn') || '', checkOut: searchParams.get('checkOut') || '' })
-  const [guests, setGuests] = useState(searchParams.get('guests') || '2')
+  const [guests, setGuests] = useState(() => {
+    const requestedGuests = Number(searchParams.get('guests'))
+    return Number.isSafeInteger(requestedGuests) && requestedGuests >= 1
+      ? String(requestedGuests)
+      : '2'
+  })
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
@@ -59,18 +64,31 @@ export default function HotelDetails() {
   ))
 
   const roomChoices = useMemo(() => rooms
-    .filter((room) => Number(room.maxPeople) >= Number(guests))
     .flatMap((room) => room.roomNumbers.map((number) => {
       const unavailable = number.unavailableDates?.some((day) => {
         const date = new Date(day).toISOString().slice(0, 10)
         return dates.checkIn && dates.checkOut && date >= dates.checkIn && date < dates.checkOut
       })
-      return unavailable ? null : { roomId: room._id, number: number.number, title: room.title, price: room.price, maxPeople: room.maxPeople }
+      return unavailable ? null : {
+        roomId: room._id,
+        roomNumber: number.number,
+        title: room.title,
+        price: Number(room.price),
+        capacity: Number(room.maxPeople),
+      }
     }))
-    .filter(Boolean), [rooms, dates, guests])
+    .filter(Boolean), [rooms, dates])
 
-  const selectedRoom = roomChoices.find((choice) => `${choice.roomId}:${choice.number}` === roomNumber)
-  const startingPrice = rooms.length ? Math.min(...rooms.map((room) => Number(room.price))) : 0
+  const guestCount = Number(guests)
+  const validGuestCount = Number.isSafeInteger(guestCount) && guestCount >= 1
+  const roomAllocation = useMemo(
+    () => allocateGuestRooms(roomChoices, guestCount),
+    [roomChoices, guestCount],
+  )
+  const availableCapacity = roomChoices.reduce((total, room) => total + room.capacity, 0)
+  const startingPrice = roomAllocation
+    ? roomAllocation.reduce((total, room) => total + room.price, 0)
+    : null
   const nights = dates.checkIn && dates.checkOut
     ? Math.max(0, (new Date(`${dates.checkOut}T00:00:00Z`) - new Date(`${dates.checkIn}T00:00:00Z`)) / 86400000)
     : 0
@@ -83,22 +101,43 @@ export default function HotelDetails() {
       navigate('/login', { state: { from: `/hotels/${id}` } })
       return
     }
-    if (!selectedRoom || !dates.checkIn || !dates.checkOut || nights < 1) {
-      setError('Choose an available room and valid check-in/check-out dates.')
+    if (!validGuestCount || !roomAllocation || !dates.checkIn || !dates.checkOut || nights < 1) {
+      setError('Enter a valid guest count, choose dates, and make sure enough rooms are available.')
       return
     }
     setBusy(true)
     try {
-      await api.post('/bookings', {
+      const { data } = await api.post('/bookings', {
         hotelId: id,
-        roomId: selectedRoom.roomId,
-        roomNumber: selectedRoom.number,
-        guests: Number(guests),
+        guests: guestCount,
+        rooms: roomAllocation.map(({ roomId, roomNumber, guests: assignedGuests }) => ({
+          roomId,
+          roomNumber,
+          guests: assignedGuests,
+        })),
         checkIn: dates.checkIn,
         checkOut: dates.checkOut,
       })
-      setNotice('Your stay is reserved. You can view the booking in your profile.')
-      setRoomNumber('')
+      setNotice(`Your stay is reserved in ${data.booking.rooms.length} ${data.booking.rooms.length === 1 ? 'room' : 'rooms'}.`)
+      const bookedRoomIds = new Set(data.booking.rooms.map((room) => `${room.roomId}:${room.roomNumber}`))
+      setRooms((currentRooms) => currentRooms.map((room) => ({
+        ...room,
+        roomNumbers: room.roomNumbers.map((number) => (
+          bookedRoomIds.has(`${room._id}:${number.number}`)
+            ? {
+              ...number,
+              unavailableDates: [
+                ...(number.unavailableDates || []),
+                ...Array.from({ length: nights }, (_, index) => {
+                  const date = new Date(`${dates.checkIn}T00:00:00Z`)
+                  date.setUTCDate(date.getUTCDate() + index)
+                  return date.toISOString()
+                }),
+              ],
+            }
+            : number
+        )),
+      })))
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'The booking could not be completed.')
     } finally {
@@ -144,7 +183,7 @@ export default function HotelDetails() {
         </div>
         <span className="flex items-center gap-1 rounded-full bg-amber-50 px-3 py-2 text-sm font-semibold text-slate-800">{Number(hotel.rating || 0) > 0 ? <><Star size={16} className="fill-amber-400 text-amber-400" /> {Number(hotel.rating).toFixed(1)}</> : 'No reviews'} <span className="font-normal text-slate-500">({reviews.length} reviews)</span></span>
       </div>
-      {hotel.isDemo && <p className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">Academic demo only: this listing is not operated by or bookable through the named hotel. Room availability and PKR rates are illustrative. Destination images are credited and are not represented as hotel photography; confirm real offers directly with the hotel.</p>}
+      {hotel.isDemo && <p className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">Rates and availability are illustrative. A booking here does not reserve a room at the named hotel.</p>}
       <div className="relative grid gap-3 overflow-hidden rounded-2xl sm:grid-cols-2">
         {hotel.photos?.length ? hotel.photos.slice(0, 3).map((photo, index) => (
           <figure key={photo} className={index > 0 ? 'hidden sm:block' : 'sm:row-span-2'}>
@@ -162,14 +201,21 @@ export default function HotelDetails() {
           <p className="mt-4 whitespace-pre-line leading-8 text-slate-600">{hotel.desc}</p>
           <div className="my-8 h-px bg-slate-200" />
           <h2 className="text-2xl font-semibold">Rooms for your stay</h2>
-          {rooms.length ? <div className="mt-5 space-y-3">
-            {rooms.map((room) => <div key={room._id} className="rounded-xl border border-slate-200 bg-white p-5">
+          {roomAllocation?.length ? <div className="mt-5 space-y-3">
+            {roomAllocation.map((allocation) => {
+              const room = rooms.find((item) => item._id === allocation.roomId)
+              return <div key={`${allocation.roomId}:${allocation.roomNumber}`} className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex flex-wrap justify-between gap-3">
-                <div><h3 className="font-semibold">{room.title}</h3><p className="mt-1 text-sm text-slate-500">{room.desc}</p><p className="mt-2 text-xs text-slate-500">Up to {room.maxPeople} guests · Room numbers: {room.roomNumbers.map((item) => item.number).join(', ')}</p></div>
-                <p className="font-semibold">{formatPKR(room.price)} <span className="font-normal text-slate-500">/ night</span></p>
+                <div><h3 className="font-semibold">{allocation.title} · Room #{allocation.roomNumber}</h3><p className="mt-1 text-sm text-slate-500">{room?.desc}</p><p className="mt-2 text-xs text-slate-500">{allocation.guests} {allocation.guests === 1 ? 'guest' : 'guests'} · Capacity {allocation.capacity}</p></div>
+                <p className="font-semibold">{formatPKR(allocation.price)} <span className="font-normal text-slate-500">/ night</span></p>
               </div>
-            </div>)}
-          </div> : <p className="mt-4 text-slate-500">No rooms are currently listed.</p>}
+            </div>
+            })}
+          </div> : <p className="mt-4 text-slate-500">{rooms.length
+            ? roomChoices.length
+              ? `Available rooms can accommodate up to ${availableCapacity} guests${dates.checkIn && dates.checkOut ? ' on these dates' : ''}.`
+              : `No rooms are available${dates.checkIn && dates.checkOut ? ' on these dates' : ''}.`
+            : 'No rooms are currently listed.'}</p>}
           <div className="my-8 h-px bg-slate-200" />
           <h2 className="text-2xl font-semibold">Guest notes</h2>
           <div className="mt-5 space-y-4">
@@ -178,7 +224,7 @@ export default function HotelDetails() {
               <p className="mt-2 text-sm leading-6 text-slate-600">{review.comment}</p>
             </article>) : <p className="text-slate-500">No reviews yet—be the first to share your experience after your stay.</p>}
           </div>
-          {hasCompletedStay && <form onSubmit={saveReview} className="mt-5 rounded-xl border border-slate-200 bg-white p-5">
+          {hasCompletedStay && <form id="guest-review-form" onSubmit={saveReview} className="mt-5 scroll-mt-24 rounded-xl border border-slate-200 bg-white p-5">
             <h3 className="font-semibold">{ownReview ? 'Update your review' : 'Share your stay'}</h3>
             <div className="mt-4 grid gap-3 sm:grid-cols-[150px_1fr]">
               <label className="text-sm font-medium text-slate-700">Your rating<select value={reviewForm.rating} onChange={(event) => setReviewForm({ ...reviewForm, rating: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-3"><option value="5">5 — Excellent</option><option value="4">4 — Great</option><option value="3">3 — Good</option><option value="2">2 — Fair</option><option value="1">1 — Poor</option></select></label>
@@ -188,20 +234,25 @@ export default function HotelDetails() {
           </form>}
         </section>
         <aside className="h-fit rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:sticky lg:top-28">
-          <p className="text-sm text-slate-500">A night from</p>
-          <p className="mt-1 text-3xl font-semibold">{formatPKR(startingPrice)} <span className="text-base font-normal text-slate-500">/ night</span></p>
+          <p className="text-sm text-slate-500">{startingPrice === null ? 'Availability' : `Starting rate for ${guests} ${Number(guests) === 1 ? 'guest' : 'guests'}`}</p>
+          <p className="mt-1 text-3xl font-semibold">{startingPrice === null ? 'No rooms available' : <>{formatPKR(startingPrice)} <span className="text-base font-normal text-slate-500">/ night</span></>}</p>
           <form onSubmit={reserve} className="mt-6 space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <label className="text-xs font-semibold text-slate-600">Check-in<span className="mt-1 flex items-center gap-2 rounded-lg border border-slate-200 p-2.5"><CalendarDays size={15} className="text-amber-700" /><input required type="date" value={dates.checkIn} onChange={(event) => { setDates({ ...dates, checkIn: event.target.value }); setRoomNumber('') }} className="w-full min-w-0 text-xs outline-none" /></span></label>
-              <label className="text-xs font-semibold text-slate-600">Check-out<span className="mt-1 flex items-center gap-2 rounded-lg border border-slate-200 p-2.5"><CalendarDays size={15} className="text-amber-700" /><input required type="date" value={dates.checkOut} onChange={(event) => { setDates({ ...dates, checkOut: event.target.value }); setRoomNumber('') }} className="w-full min-w-0 text-xs outline-none" /></span></label>
+              <label className="text-xs font-semibold text-slate-600">Check-in<span className="mt-1 flex items-center gap-2 rounded-lg border border-slate-200 p-2.5"><CalendarDays size={15} className="text-amber-700" /><input required type="date" value={dates.checkIn} onChange={(event) => setDates({ ...dates, checkIn: event.target.value })} className="w-full min-w-0 text-xs outline-none" /></span></label>
+              <label className="text-xs font-semibold text-slate-600">Check-out<span className="mt-1 flex items-center gap-2 rounded-lg border border-slate-200 p-2.5"><CalendarDays size={15} className="text-amber-700" /><input required type="date" value={dates.checkOut} onChange={(event) => setDates({ ...dates, checkOut: event.target.value })} className="w-full min-w-0 text-xs outline-none" /></span></label>
             </div>
-            <label className="block text-xs font-semibold text-slate-600">Guests<select value={guests} onChange={(event) => { setGuests(event.target.value); setRoomNumber('') }} className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal outline-none"><option value="1">1 guest</option>{[2, 3, 4, 5, 6].map((count) => <option key={count} value={count}>{count} guests</option>)}</select></label>
-            <label className="block text-xs font-semibold text-slate-600">Available room<select required value={roomNumber} onChange={(event) => setRoomNumber(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal outline-none"><option value="">Select a room</option>{roomChoices.map((choice) => <option key={`${choice.roomId}:${choice.number}`} value={`${choice.roomId}:${choice.number}`}>{choice.title} · #{choice.number} · {formatPKR(choice.price)}/night</option>)}</select></label>
-            {selectedRoom && nights > 0 && <div className="flex justify-between border-t border-slate-100 pt-4 text-sm"><span className="text-slate-500">{formatPKR(selectedRoom.price)} × {nights} nights</span><strong>{formatPKR(selectedRoom.price * nights)}</strong></div>}
+            <label className="block text-xs font-semibold text-slate-600">Guests<input required min="1" step="1" type="number" inputMode="numeric" value={guests} onChange={(event) => setGuests(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm font-normal outline-none" /></label>
+            {roomAllocation?.length ? <div className="space-y-2 border-t border-slate-100 pt-4 text-sm">
+              <p className="font-semibold">{roomAllocation.length} {roomAllocation.length === 1 ? 'room' : 'rooms'} for {guestCount} {guestCount === 1 ? 'guest' : 'guests'}</p>
+              {roomAllocation.map((room) => <p key={`${room.roomId}:${room.roomNumber}`} className="flex justify-between gap-3 text-slate-500"><span>{room.title} · #{room.roomNumber} · {room.guests} {room.guests === 1 ? 'guest' : 'guests'}</span><span>{formatPKR(room.price)}/night</span></p>)}
+              {nights > 0 && <div className="flex justify-between border-t border-slate-100 pt-3"><span className="text-slate-500">{formatPKR(startingPrice)} × {nights} nights</span><strong>{formatPKR(startingPrice * nights)}</strong></div>}
+            </div> : validGuestCount ? <p className="text-sm text-slate-500">{roomChoices.length
+              ? `Available rooms can accommodate up to ${availableCapacity} guests for these dates.`
+              : 'No rooms are available for these dates.'}</p> : <p className="text-sm text-rose-700">Enter a positive whole number of guests.</p>}
             <p className="text-xs text-slate-500">All rates are shown in Pakistani rupees (PKR).</p>
             {error && <Notice>{error}</Notice>}
             {notice && <Notice tone="success">{notice}</Notice>}
-            <button disabled={busy || !roomChoices.length} className="w-full rounded-xl bg-amber-600 px-5 py-3.5 font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Reserving…' : user ? 'Reserve your stay' : 'Sign in to reserve'}</button>
+            <button disabled={busy || !roomAllocation || !dates.checkIn || !dates.checkOut || nights < 1} className="w-full rounded-xl bg-amber-600 px-5 py-3.5 font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Reserving…' : user ? 'Reserve your stay' : 'Sign in to reserve'}</button>
             <p className="text-center text-xs text-slate-500">You won’t be charged yet.</p>
           </form>
           {!user && <p className="mt-4 text-center text-sm text-slate-500">New to Staywell? <Link to="/register" className="font-semibold text-amber-700 hover:underline">Create an account</Link></p>}

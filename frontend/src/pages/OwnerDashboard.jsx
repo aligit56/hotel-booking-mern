@@ -5,9 +5,11 @@ import HotelImage from '../components/HotelImage'
 import { DestinationCredit } from '../components/DestinationImage'
 import Notice from '../components/Notice'
 import { formatPKR } from '../utils/currency'
+import bookingRoomSummary from '../utils/bookingRoomSummary'
 
 const emptyHotel = { name: '', type: 'Boutique hotel', city: '', address: '', distance: '', title: '', desc: '', featured: false }
 const emptyRoom = { title: '', price: '', maxPeople: '2', desc: '', roomNumbers: '' }
+const initialRoom = { title: 'Standard room', price: '', maxPeople: '2', desc: '', roomNumbers: '' }
 
 async function fetchDashboardData() {
   const [{ data: hotelData }, { data: bookingData }] = await Promise.all([
@@ -26,6 +28,8 @@ export default function OwnerDashboard() {
   const [rooms, setRooms] = useState({})
   const [bookings, setBookings] = useState([])
   const [hotelForm, setHotelForm] = useState(emptyHotel)
+  const [firstRoomForm, setFirstRoomForm] = useState(initialRoom)
+  const [newHotelPhotos, setNewHotelPhotos] = useState([])
   const [roomForms, setRoomForms] = useState({})
   const [editingHotel, setEditingHotel] = useState('')
   const [editingRoom, setEditingRoom] = useState('')
@@ -72,25 +76,74 @@ export default function OwnerDashboard() {
     event.preventDefault()
     setError('')
     setNotice('')
+    const creatingHotel = !editingHotel
+    const roomIsComplete = firstRoomForm.title.trim()
+      && Number(firstRoomForm.price) > 0
+      && Number(firstRoomForm.maxPeople) > 0
+      && firstRoomForm.desc.trim()
+      && firstRoomForm.roomNumbers.split(',').some((number) => Number.isInteger(Number(number.trim())) && Number(number.trim()) > 0)
+    if (creatingHotel && !roomIsComplete) {
+      setError('Add the first room, its nightly PKR rate, guest capacity, and at least one room number to make this listing bookable.')
+      return
+    }
+
     const body = {
       ...hotelForm,
       distance: Number(hotelForm.distance) || 0,
       featured: Boolean(hotelForm.featured),
     }
+    let hotelId = editingHotel
     try {
-      if (editingHotel) await api.patch(`/hotels/${editingHotel}`, body)
-      else await api.post('/hotels', body)
+      if (hotelId) {
+        await api.patch(`/hotels/${hotelId}`, body)
+      } else {
+        const { data } = await api.post('/hotels', body)
+        hotelId = data.hotel._id
+        setEditingHotel(hotelId)
+      }
+
+      if (roomIsComplete) {
+        await api.post('/rooms', {
+          hotelId,
+          title: firstRoomForm.title.trim(),
+          price: Number(firstRoomForm.price),
+          maxPeople: Number(firstRoomForm.maxPeople),
+          desc: firstRoomForm.desc.trim(),
+          roomNumbers: firstRoomForm.roomNumbers.split(',')
+            .map((number) => Number(number.trim()))
+            .filter((number) => Number.isInteger(number) && number > 0)
+            .map((number) => ({ number })),
+        })
+        setFirstRoomForm(emptyRoom)
+      }
+
+      for (let index = 0; index < newHotelPhotos.length; index += 1) {
+        const file = newHotelPhotos[index]
+        await api.post(`/hotels/${hotelId}/photos`, file, {
+          headers: { 'Content-Type': file.type },
+        })
+        setNewHotelPhotos((photos) => photos.slice(1))
+      }
+
       setHotelForm(emptyHotel)
       setEditingHotel('')
-      setNotice(editingHotel ? 'Property updated.' : 'Property created.')
+      setFirstRoomForm(initialRoom)
+      setNewHotelPhotos([])
+      setNotice(creatingHotel ? 'Property, first room, and photos saved.' : 'Property updated.')
       await loadDashboard()
     } catch (requestError) {
-      setError(requestError.response?.data?.message || 'The property could not be saved.')
+      const message = requestError.response?.data?.message || 'The property could not be saved.'
+      await loadDashboard()
+      setError(hotelId
+        ? `The property is saved and available to edit, but a room or photo could not be saved: ${message}`
+        : message)
     }
   }
 
   const editHotel = (hotel) => {
     setEditingHotel(hotel._id)
+    setFirstRoomForm(emptyRoom)
+    setNewHotelPhotos([])
     setHotelForm({
       name: hotel.name,
       type: hotel.type,
@@ -102,6 +155,22 @@ export default function OwnerDashboard() {
       featured: hotel.featured || false,
     })
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const chooseNewHotelPhotos = (event) => {
+    const files = Array.from(event.target.files || [])
+    event.target.value = ''
+    if (files.length > 5) {
+      setError('Select up to five property photos.')
+      return
+    }
+    const invalidFile = files.find((file) => !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024)
+    if (invalidFile) {
+      setError('Photos must be JPEG, PNG, or WebP files no larger than 5 MB each.')
+      return
+    }
+    setError('')
+    setNewHotelPhotos(files)
   }
 
   const uploadHotelPhotos = async (event, hotel) => {
@@ -126,8 +195,8 @@ export default function OwnerDashboard() {
       setNotice('Property photos uploaded.')
       await loadDashboard()
     } catch (requestError) {
-      setError(requestError.response?.data?.message || 'A property photo could not be uploaded. Any earlier uploads were saved.')
       await loadDashboard()
+      setError(requestError.response?.data?.message || 'A property photo could not be uploaded. Any earlier uploads were saved.')
     } finally {
       setUploadingHotelId('')
     }
@@ -229,11 +298,29 @@ export default function OwnerDashboard() {
           <input type="number" min="0" step="0.1" placeholder="Distance from city center (km)" value={hotelForm.distance} onChange={(event) => setHotelForm({ ...hotelForm, distance: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none focus:border-amber-600" />
           <input required placeholder="Listing headline" value={hotelForm.title} onChange={(event) => setHotelForm({ ...hotelForm, title: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none focus:border-amber-600" />
           <textarea required rows="3" placeholder="Tell guests what makes this place special" value={hotelForm.desc} onChange={(event) => setHotelForm({ ...hotelForm, desc: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none focus:border-amber-600 sm:col-span-2" />
+          <div className="rounded-xl border border-slate-200 p-4 sm:col-span-2 lg:col-span-3">
+            <h3 className="font-semibold">First room and nightly rate</h3>
+            <p className="mt-1 text-xs text-slate-500">A room is required to make the new property available for bookings. Rates are entered in PKR.</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <input required={!editingHotel} placeholder="Room name (e.g. Deluxe king)" value={firstRoomForm.title} onChange={(event) => setFirstRoomForm({ ...firstRoomForm, title: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none focus:border-amber-600" />
+              <input required={!editingHotel} type="number" min="1" step="1" placeholder="Nightly rate (PKR)" value={firstRoomForm.price} onChange={(event) => setFirstRoomForm({ ...firstRoomForm, price: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none focus:border-amber-600" />
+              <input required={!editingHotel} type="number" min="1" max="30" placeholder="Maximum guests" value={firstRoomForm.maxPeople} onChange={(event) => setFirstRoomForm({ ...firstRoomForm, maxPeople: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none focus:border-amber-600" />
+              <input required={!editingHotel} placeholder="Room numbers (e.g. 101, 102)" value={firstRoomForm.roomNumbers} onChange={(event) => setFirstRoomForm({ ...firstRoomForm, roomNumbers: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none focus:border-amber-600" />
+              <input required={!editingHotel} placeholder="Room details" value={firstRoomForm.desc} onChange={(event) => setFirstRoomForm({ ...firstRoomForm, desc: event.target.value })} className="rounded-lg border border-slate-300 px-3 py-3 text-sm outline-none focus:border-amber-600 sm:col-span-2" />
+            </div>
+          </div>
+          {!editingHotel && <div className="rounded-xl border border-slate-200 p-4 sm:col-span-2 lg:col-span-3">
+            <label className="block text-sm font-semibold">Property photos (optional)
+              <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseNewHotelPhotos} className="mt-2 block w-full text-sm font-normal text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-50 file:px-4 file:py-2 file:font-semibold file:text-amber-800" />
+            </label>
+            <p className="mt-1 text-xs text-slate-500">Up to five JPEG, PNG, or WebP photos, 5 MB each. Upload only photos you own or have permission to use.</p>
+            {newHotelPhotos.length > 0 && <p className="mt-2 text-xs font-medium text-slate-600">{newHotelPhotos.map((file) => file.name).join(' · ')}</p>}
+          </div>}
           <label className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-3 text-sm text-slate-700">
             <input type="checkbox" checked={hotelForm.featured} onChange={(event) => setHotelForm({ ...hotelForm, featured: event.target.checked })} className="h-4 w-4 accent-amber-600" />
             Feature this property on the homepage
           </label>
-          <div className="flex items-center gap-3 sm:col-span-2 lg:col-span-3"><button className="rounded-lg bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-700">{editingHotel ? 'Save property' : 'Create property'}</button>{editingHotel && <button type="button" onClick={() => { setEditingHotel(''); setHotelForm(emptyHotel) }} className="text-sm font-semibold text-slate-600">Cancel edit</button>}</div>
+          <div className="flex items-center gap-3 sm:col-span-2 lg:col-span-3"><button className="rounded-lg bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-700">{editingHotel ? 'Save property and room' : 'Create property and room'}</button>{editingHotel && <button type="button" onClick={() => { setEditingHotel(''); setHotelForm(emptyHotel); setFirstRoomForm(initialRoom); setNewHotelPhotos([]) }} className="text-sm font-semibold text-slate-600">Cancel edit</button>}</div>
         </form>
       </section>
 
@@ -248,7 +335,7 @@ export default function OwnerDashboard() {
                 {hotel.isDemo && !hotel.photos?.length && <DestinationCredit city={hotel.city} className="absolute bottom-2 right-2" />}
               </div>
               <div className="p-5 sm:p-6">
-                <div className="flex flex-wrap justify-between gap-4"><div><p className="text-sm text-slate-500">{hotel.city} · {hotel.type}</p><h3 className="mt-1 text-xl font-semibold">{hotel.name}</h3><p className="mt-1 max-w-2xl text-sm text-slate-500">{hotel.title}</p>{hotel.isDemo && <span className="mt-2 inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">Sample property</span>}</div><div className="flex items-start gap-2"><button onClick={() => editHotel(hotel)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:border-slate-900">Edit property</button><button onClick={() => removeHotel(hotel._id)} aria-label={`Delete ${hotel.name}`} className="rounded-lg border border-rose-200 p-2 text-rose-700 hover:bg-rose-50"><Trash2 size={17} /></button></div></div>
+                <div className="flex flex-wrap justify-between gap-4"><div><p className="text-sm text-slate-500">{hotel.city} · {hotel.type}</p><h3 className="mt-1 text-xl font-semibold">{hotel.name}</h3><p className="mt-1 max-w-2xl text-sm text-slate-500">{hotel.title}</p></div><div className="flex items-start gap-2"><button onClick={() => editHotel(hotel)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:border-slate-900">Edit property</button><button onClick={() => removeHotel(hotel._id)} aria-label={`Delete ${hotel.name}`} className="rounded-lg border border-rose-200 p-2 text-rose-700 hover:bg-rose-50"><Trash2 size={17} /></button></div></div>
                 <div className="mt-4">
                   <label className="inline-flex cursor-pointer items-center rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-slate-900">
                     {uploadingHotelId === hotel._id ? 'Uploading…' : 'Upload property photos'}
@@ -276,7 +363,7 @@ export default function OwnerDashboard() {
 
       <section className="mt-12">
         <h2 className="mb-5 flex items-center gap-2 text-2xl font-semibold"><CalendarDays size={22} /> Property bookings</h2>
-        {bookings.length ? <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white"><table className="w-full min-w-[700px] text-left text-sm"><thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-5 py-4">Guest</th><th className="px-5 py-4">Property / room</th><th className="px-5 py-4">Dates</th><th className="px-5 py-4">Total (PKR)</th><th className="px-5 py-4">Status</th><th className="px-5 py-4">Update</th></tr></thead><tbody className="divide-y divide-slate-100">{bookings.map((booking) => <tr key={booking._id}><td className="px-5 py-4 font-medium">{booking.userId?.name || 'Guest'}<span className="block text-xs font-normal text-slate-500">{booking.userId?.email}</span></td><td className="px-5 py-4">{booking.hotelId?.name}<span className="block text-xs text-slate-500">{booking.roomId?.title} · #{booking.roomNumber}</span></td><td className="px-5 py-4">{new Date(booking.checkIn).toLocaleDateString()} – {new Date(booking.checkOut).toLocaleDateString()}</td><td className="px-5 py-4 font-semibold">{formatPKR(booking.totalPrice)}</td><td className="px-5 py-4 capitalize">{booking.status}</td><td className="px-5 py-4">{['pending', 'confirmed'].includes(booking.status) && <select value={booking.status} onChange={(event) => changeBookingStatus(booking._id, event.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5"><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select>}</td></tr>)}</tbody></table></div> : <p className="rounded-xl bg-white p-8 text-center text-slate-500 ring-1 ring-slate-200">No bookings for your properties yet.</p>}
+        {bookings.length ? <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white"><table className="w-full min-w-[700px] text-left text-sm"><thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-5 py-4">Guest</th><th className="px-5 py-4">Property / room</th><th className="px-5 py-4">Dates</th><th className="px-5 py-4">Total (PKR)</th><th className="px-5 py-4">Status</th><th className="px-5 py-4">Update</th></tr></thead><tbody className="divide-y divide-slate-100">{bookings.map((booking) => <tr key={booking._id}><td className="px-5 py-4 font-medium">{booking.userId?.name || 'Guest'}<span className="block text-xs font-normal text-slate-500">{booking.userId?.email}</span></td><td className="px-5 py-4">{booking.hotelId?.name}<span className="block text-xs text-slate-500">{bookingRoomSummary(booking)}</span></td><td className="px-5 py-4">{new Date(booking.checkIn).toLocaleDateString()} – {new Date(booking.checkOut).toLocaleDateString()}</td><td className="px-5 py-4 font-semibold">{formatPKR(booking.totalPrice)}</td><td className="px-5 py-4 capitalize">{booking.status}</td><td className="px-5 py-4">{['pending', 'confirmed'].includes(booking.status) && <select value={booking.status} onChange={(event) => changeBookingStatus(booking._id, event.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5"><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select>}</td></tr>)}</tbody></table></div> : <p className="rounded-xl bg-white p-8 text-center text-slate-500 ring-1 ring-slate-200">No bookings for your properties yet.</p>}
       </section>
     </main>
   )

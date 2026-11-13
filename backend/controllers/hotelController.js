@@ -3,11 +3,39 @@ const Hotel = require('../models/Hotel')
 const Room = require('../models/Room')
 const HttpError = require('../utils/HttpError')
 const { removeStoredHotelPhoto, saveHotelPhoto } = require('../utils/hotelPhotoStorage')
+const allocateGuestRooms = require('../utils/allocateGuestRooms')
 
 const maxHotelPhotos = 5
 
 function validId(id) {
   if (!mongoose.isValidObjectId(id)) throw new HttpError(400, 'Invalid record ID.')
+}
+
+function requestedCalendarDates(checkInValue, checkOutValue) {
+  if (!checkInValue && !checkOutValue) return []
+  if (!checkInValue || !checkOutValue) {
+    throw new HttpError(400, 'Check-in and check-out dates must be provided together.')
+  }
+
+  const toDate = (value) => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+    const date = new Date(`${value}T00:00:00.000Z`)
+    return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value ? date : null
+  }
+  const checkIn = toDate(checkInValue)
+  const checkOut = toDate(checkOutValue)
+  if (!checkIn || !checkOut || checkOut <= checkIn) {
+    throw new HttpError(400, 'Valid check-in and check-out dates are required.')
+  }
+
+  const nights = (checkOut - checkIn) / 86400000
+  if (nights > 365) throw new HttpError(400, 'A stay cannot be longer than 365 nights.')
+
+  return Array.from({ length: nights }, (_, index) => {
+    const date = new Date(checkIn)
+    date.setUTCDate(date.getUTCDate() + index)
+    return date
+  })
 }
 
 async function listHotels(req, res) {
@@ -19,6 +47,47 @@ async function listHotels(req, res) {
   if (req.query.featured === 'true') match.featured = true
   if (req.query.minRating) match.rating = { $gte: Number(req.query.minRating) }
   if (req.query.ownerId && req.user?.role === 'admin') match.ownerId = req.query.ownerId
+
+  const guestCount = req.query.guests === undefined || req.query.guests === ''
+    ? null
+    : Number(req.query.guests)
+  if (guestCount !== null && (!Number.isSafeInteger(guestCount) || guestCount < 1)) {
+    throw new HttpError(400, 'Guest count must be a positive whole number.')
+  }
+  const requestedDates = requestedCalendarDates(req.query.checkIn, req.query.checkOut)
+  const roomInventoryPipeline = [
+    { $match: { $expr: { $eq: ['$hotelId', '$$hotelId'] } } },
+    { $unwind: '$roomNumbers' },
+  ]
+  if (requestedDates.length) {
+    roomInventoryPipeline.push({
+      $match: {
+        $expr: {
+          $eq: [
+            {
+              $size: {
+                $setIntersection: [
+                  { $ifNull: ['$roomNumbers.unavailableDates', []] },
+                  requestedDates,
+                ],
+              },
+            },
+            0,
+          ],
+        },
+      },
+    })
+  }
+  roomInventoryPipeline.push({
+    $project: {
+      _id: 0,
+      roomId: '$_id',
+      roomNumber: '$roomNumbers.number',
+      title: 1,
+      price: 1,
+      capacity: '$maxPeople',
+    },
+  })
 
   const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1)
   const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 12, 1), 50)
@@ -44,16 +113,26 @@ async function listHotels(req, res) {
       $lookup: {
         from: 'rooms',
         let: { hotelId: '$_id' },
-        pipeline: [
-          { $match: { $expr: { $eq: ['$hotelId', '$$hotelId'] } } },
-          { $group: { _id: null, minPrice: { $min: '$price' } } },
-        ],
-        as: 'priceInfo',
+        pipeline: roomInventoryPipeline,
+        as: 'roomOptions',
       },
     },
-    { $set: { minPrice: { $ifNull: [{ $first: '$priceInfo.minPrice' }, null] } } },
-    { $unset: ['priceInfo', 'demoKey'] },
+    { $unset: 'demoKey' },
   ])
+  for (const hotel of hotels) {
+    const availableRooms = hotel.roomOptions || []
+    if (guestCount === null) {
+      hotel.minPrice = availableRooms.length
+        ? availableRooms.reduce((price, room) => Math.min(price, room.price), Infinity)
+        : null
+    } else {
+      const allocation = allocateGuestRooms(availableRooms, guestCount)
+      hotel.minPrice = allocation
+        ? allocation.reduce((total, room) => total + room.price, 0)
+        : null
+    }
+    delete hotel.roomOptions
+  }
   const total = await Hotel.countDocuments(match)
   return res.json({ hotels, page, pages: Math.ceil(total / limit), total })
 }

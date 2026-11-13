@@ -7,6 +7,7 @@ import HotelImage from '../components/HotelImage'
 import { DestinationCredit } from '../components/DestinationImage'
 import Notice from '../components/Notice'
 import { formatPKR } from '../utils/currency'
+import bookingRoomSummary from '../utils/bookingRoomSummary'
 
 function formatDate(value) {
   return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
@@ -98,8 +99,8 @@ export default function UserProfile() {
                 {booking.hotelId?.isDemo && !booking.hotelId.photos?.length && <DestinationCredit city={booking.hotelId.city} className="absolute bottom-1 right-1" />}
               </div>
               <div className="flex flex-col justify-between gap-5">
-                <div className="flex flex-wrap justify-between gap-3"><div><p className="flex items-center gap-1 text-sm text-slate-500"><MapPin size={14} />{booking.hotelId?.city}</p><h3 className="mt-1 text-lg font-semibold">{booking.hotelId?.name || 'Hotel'}</h3><p className="mt-1 text-sm text-slate-500">{booking.roomId?.title} · Room {booking.roomNumber}</p></div><span className={`h-fit rounded-full px-3 py-1 text-xs font-semibold capitalize ${booking.status === 'cancelled' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>{booking.status}</span></div>
-                <div className="flex flex-wrap items-end justify-between gap-3 border-t border-slate-100 pt-4"><p className="flex items-center gap-2 text-sm text-slate-600"><CalendarDays size={15} />{formatDate(booking.checkIn)} – {formatDate(booking.checkOut)} <span className="font-semibold text-slate-900">{formatPKR(booking.totalPrice)}</span></p>{['pending', 'confirmed'].includes(booking.status) && <button onClick={() => cancelBooking(booking._id)} className="text-sm font-semibold text-rose-700 hover:underline">Cancel booking</button>}</div>
+                <div className="flex flex-wrap justify-between gap-3"><div><p className="flex items-center gap-1 text-sm text-slate-500"><MapPin size={14} />{booking.hotelId?.city}</p><h3 className="mt-1 text-lg font-semibold">{booking.hotelId?.name || 'Hotel'}</h3><p className="mt-1 text-sm text-slate-500">{bookingRoomSummary(booking)}</p></div><span className={`h-fit rounded-full px-3 py-1 text-xs font-semibold capitalize ${booking.status === 'cancelled' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700'}`}>{booking.status}</span></div>
+                <div className="flex flex-wrap items-end justify-between gap-3 border-t border-slate-100 pt-4"><p className="flex items-center gap-2 text-sm text-slate-600"><CalendarDays size={15} />{formatDate(booking.checkIn)} – {formatDate(booking.checkOut)} <span className="font-semibold text-slate-900">{formatPKR(booking.totalPrice)}</span></p><div className="flex items-center gap-4">{booking.status === 'completed' && booking.hotelId?._id && <Link to={`/hotels/${booking.hotelId._id}#guest-review-form`} className="text-sm font-semibold text-amber-700 hover:underline">Review this stay</Link>}{['pending', 'confirmed'].includes(booking.status) && <><span className="text-sm text-slate-500">Review after your stay</span><button onClick={() => cancelBooking(booking._id)} className="text-sm font-semibold text-rose-700 hover:underline">Cancel booking</button></>}</div></div>
               </div>
             </article>)}
           </div> : <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center"><h3 className="font-semibold">Your next stay starts here.</h3><p className="mt-2 text-sm text-slate-500">You haven’t made a booking yet.</p><Link to="/hotels" className="mt-5 inline-flex rounded-lg bg-slate-900 px-5 py-3 text-sm font-semibold text-white">Explore stays</Link></div>}

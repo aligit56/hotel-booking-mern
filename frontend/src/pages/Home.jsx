@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   ArrowRight,
   CalendarDays,
-  CheckCircle2,
   HeartHandshake,
   MapPin,
   ShieldCheck,
@@ -157,9 +156,7 @@ export default function Home() {
           </label>
           <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
             Guests
-            <select value={search.guests} onChange={(event) => setSearch({ ...search, guests: event.target.value })} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-600">
-              {[1, 2, 3, 4, 5, 6].map((number) => <option key={number} value={number}>{number} {number === 1 ? 'guest' : 'guests'}</option>)}
-            </select>
+            <input required min="1" step="1" type="number" inputMode="numeric" value={search.guests} onChange={(event) => setSearch({ ...search, guests: event.target.value })} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-normal text-slate-800 outline-none focus:border-amber-600" />
           </label>
           <button className="flex min-h-[46px] items-center justify-center gap-2 rounded-xl bg-amber-600 px-6 font-semibold text-white hover:bg-amber-700">
             Search stays <ArrowRight size={17} />
@@ -179,9 +176,8 @@ export default function Home() {
         {hotels.length > 0 ? (
           <>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">{hotels.map((hotel) => <HotelCard key={hotel._id} hotel={hotel} />)}</div>
-            {hotels.some((hotel) => hotel.isDemo) && <p className="mt-4 text-xs text-slate-500">Hotel names refer to real properties, but these academic demo listings are not affiliated with them and bookings here are not official hotel reservations. Rates and room availability are illustrative PKR values; credited destination photos are not hotel photography. Owners can upload photos they have permission to use.</p>}
           </>
-        ) : !hotelError ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">Featured stays are being prepared. Browse by destination or check back after demo listings are seeded.</div> : null}
+        ) : !hotelError ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">Featured properties will appear here soon.</div> : null}
       </section>
 
       <section className="mx-auto max-w-7xl px-5 py-16">
@@ -236,9 +232,12 @@ export default function Home() {
           <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-amber-800">Guest reviews</p>
-              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">Notes from real stays.</h2>
+              <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">Notes from stays.</h2>
             </div>
-            <p className="max-w-md text-sm leading-6 text-slate-600">Reviews are shared by guests with completed bookings. We don’t invent ratings or testimonials.</p>
+            <div className="flex flex-wrap items-center gap-4">
+              <p className="max-w-md text-sm leading-6 text-slate-600">Reviews are shared by guests after completed stays.</p>
+              <Link to="/profile" className="text-sm font-semibold text-amber-800 hover:underline">Review a completed stay</Link>
+            </div>
           </div>
           {reviewError && <p role="alert" className="mb-5 rounded-xl bg-rose-50 p-4 text-sm text-rose-800">{reviewError}</p>}
           {reviews.length ? (
@@ -257,10 +256,9 @@ export default function Home() {
               ))}
             </div>
           ) : !reviewError && (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-10 text-center text-slate-500">
               <Star size={24} className="mx-auto text-amber-600" />
-              <h3 className="mt-3 font-semibold">Guest reviews will appear here</h3>
-              <p className="mt-2 text-sm text-slate-500">Once a guest completes a stay and leaves a review, we’ll share their verified feedback.</p>
+              <p className="mt-3 font-medium">No guest reviews yet.</p>
             </div>
           )}
         </div>
@@ -276,13 +274,6 @@ export default function Home() {
           <Link to="/register?role=owner" className="mt-7 inline-flex shrink-0 items-center gap-2 rounded-xl bg-amber-500 px-5 py-3.5 font-semibold text-slate-950 hover:bg-amber-400 lg:ml-8 lg:mt-0">
             List your property <ArrowRight size={17} />
           </Link>
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-7xl px-5 pb-4">
-        <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-600">
-          <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-emerald-700" />
-          <p>Demo inventory is provided to preview the experience. Prices and room availability are illustrative PKR values, not live offers. Destination photos link to their Wikimedia Commons source and license; owners should upload only hotel photos they have permission to use.</p>
         </div>
       </section>
     </main>
